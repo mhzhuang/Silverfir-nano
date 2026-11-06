@@ -51,7 +51,8 @@ use super::{
     lower_cache_layout::{compute_block_entry_cache_params, preferred_preserved_for_cached},
     lower_const_pool::ConstPoolBuilder,
     lower_context::{
-        explicit_cached_cells, BlockLowerContext, CachedCell, EntryCacheParam, ValueRegs,
+        explicit_cached_cells, BlockLowerContext, BlockLowerScratch, CachedCell, EntryCacheParam,
+        ValueRegs,
     },
     lower_i64::I64Lowering,
     lower_i64_gp64::Gp64Lowering,
@@ -444,6 +445,7 @@ fn lower_function(
         &call_preserved_cache_candidates,
     );
     release_cache_planning_only_ssa_storage(&mut input.ssa);
+    let mut scratch = BlockLowerScratch::default();
     for block_index in 0..original_block_count {
         let block = take_block_for_lowering(&mut input.ssa.blocks[block_index]);
         let target = block.id;
@@ -466,6 +468,7 @@ fn lower_function(
             guard_pages,
             #[cfg(sf_has_guard_pages)]
             stack_guard_pages,
+            core::mem::take(&mut scratch),
         )?;
         let mut current_block = MachineBlockId(block.id.as_u32());
         let mut current_params = collections::Vec::new();
@@ -794,6 +797,7 @@ fn lower_function(
                     lower.take_ops(),
                     terminator,
                 )?;
+                scratch = lower.into_scratch();
                 continue;
             }
             SsaTerminator::TailCallIndirect {
@@ -842,6 +846,7 @@ fn lower_function(
                     &mut extra_block_ids,
                     const_pool,
                 )?;
+                scratch = lower.into_scratch();
                 continue;
             }
             SsaTerminator::TailCallRef {
@@ -881,6 +886,7 @@ fn lower_function(
                     &mut extra_block_ids,
                     const_pool,
                 )?;
+                scratch = lower.into_scratch();
                 continue;
             }
             SsaTerminator::EhThrow { tag_idx, args } => {
@@ -903,6 +909,7 @@ fn lower_function(
                     lower.take_ops(),
                     terminator,
                 )?;
+                scratch = lower.into_scratch();
                 continue;
             }
             SsaTerminator::EhThrowRef { exnref_slot } => {
@@ -924,6 +931,7 @@ fn lower_function(
                     lower.take_ops(),
                     terminator,
                 )?;
+                scratch = lower.into_scratch();
                 continue;
             }
             _ => {}
@@ -938,6 +946,7 @@ fn lower_function(
             lower.take_ops(),
             terminator,
         )?;
+        scratch = lower.into_scratch();
     }
 
     release_prepared_ssa_storage(&mut input.ssa);
@@ -2477,6 +2486,10 @@ fn lower_indirect_dispatch_cluster(
     local_transfer_ops.extend(lower.take_ops());
     let mut result_success_args = collections::Vec::new();
     let mut continuation_params = collections::Vec::new();
+    // The fast transfers dispatch through a precomputed entry and never load
+    // the callee's identity; the generic transfer computes it from the
+    // element.
+    let dispatch_callee_target = (!fast_transfer).then_some(indirect_temps.lane0);
     let local_transfer_term = match continuation {
         Some(continuation) => {
             let IndirectTransfer::Call {
@@ -2498,7 +2511,7 @@ fn lower_indirect_dispatch_cluster(
             continuation_params = params;
             MachineTerminator::Call {
                 target: MachineCallTarget::Indirect {
-                    callee_target: indirect_temps.lane0,
+                    callee_target: dispatch_callee_target,
                     callee_entry: indirect_temps.lane2,
                 },
                 frame_delta: slot_offset_bytes(transfer.source_args().start)? as u32,
@@ -2512,7 +2525,7 @@ fn lower_indirect_dispatch_cluster(
         }
         None => MachineTerminator::TailCall {
             target: MachineCallTarget::Indirect {
-                callee_target: indirect_temps.lane0,
+                callee_target: dispatch_callee_target,
                 callee_entry: indirect_temps.lane2,
             },
             args: machine_call_args,
@@ -2660,13 +2673,16 @@ fn attach_edge_args(
 }
 
 #[inline]
+/// Fills `regs` with the registers a block's parameters arrive in.
 pub(super) fn target_param_regs(
+    regs: &mut collections::Vec<ValueRegs>,
     params: &[SsaValue],
     program: &SsaProgram,
     regfile: &MachineRegFile,
     gp_reg_width: u8,
-) -> Result<collections::Vec<ValueRegs>, WasmError> {
-    let mut regs = collections::Vec::with_capacity(params.len());
+) -> Result<(), WasmError> {
+    regs.clear();
+    regs.reserve(params.len());
     let mut gp_index = 0usize;
     let mut fp_index = 0usize;
     for param in params {
@@ -2698,7 +2714,7 @@ pub(super) fn target_param_regs(
             gp_index += 1;
         }
     }
-    Ok(regs)
+    Ok(())
 }
 
 fn program_value_storage_type(program: &SsaProgram, value: SsaValue) -> MachineStorageType {
@@ -3514,13 +3530,6 @@ fn build_call_indirect_fixed_table_load_block(
             fixed_entry.entry_offset,
             lower.gp_word_mem_width(),
             MachineLoadExtension::None,
-        ),
-        // The scaled index is dead after this load, which reuses its lane.
-        field(
-            local_target,
-            fixed_entry.local_target_offset,
-            MachineMemWidth::U32,
-            MachineLoadExtension::ZeroExtend,
         ),
     ])
 }

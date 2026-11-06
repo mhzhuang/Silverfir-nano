@@ -17,7 +17,9 @@ use super::{
 };
 
 use super::backend::BranchFixup;
-use super::fusion::{cmp_imm_inst, int_binary_imm_inst, map_float_cond, map_int_cond, ExactCopy18};
+use super::fusion::{
+    add_sub_imm_pair, cmp_imm_inst, int_binary_imm_inst, map_float_cond, map_int_cond, ExactCopy18,
+};
 use crate::vm::jit::arch::common::helpers::convert_result_float_width;
 use crate::vm::jit::arch::common::scratch_pool::ScratchPool;
 use crate::vm::jit::arch::common::text_emitter::TextEmitter;
@@ -2370,6 +2372,12 @@ impl<'a> super::backend::Arm64Backend<'a> {
                     self.core.text.emit_u32(inst);
                     return Ok(());
                 }
+                if let Some(pair) = add_sub_imm_pair(width, op, dst, lhs_phys, imm) {
+                    for inst in pair {
+                        self.core.text.emit_u32(inst);
+                    }
+                    return Ok(());
+                }
             }
         }
         if let MachineValue::Imm64(imm) = lhs {
@@ -2384,6 +2392,12 @@ impl<'a> super::backend::Arm64Backend<'a> {
                     | MachineIntBinaryOp::Xor => {
                         if let Some(inst) = int_binary_imm_inst(width, op, dst, rhs_phys, imm) {
                             self.core.text.emit_u32(inst);
+                            return Ok(());
+                        }
+                        if let Some(pair) = add_sub_imm_pair(width, op, dst, rhs_phys, imm) {
+                            for inst in pair {
+                                self.core.text.emit_u32(inst);
+                            }
                             return Ok(());
                         }
                     }
@@ -2640,16 +2654,22 @@ impl<'a> super::backend::Arm64Backend<'a> {
         rhs: MachineValue,
     ) -> Result<(), WasmError> {
         let dst = self.map_gp_reg(dst_m)?;
+        // Set flags only for a reader: a flag-setting AND is no cheaper
+        // than a plain one on any core, and costlier on some.
+        let publish = self.next_tests_nonzero(dst_m);
+        let published = publish.then_some((dst_m, enc::Cond::Ne));
         for (a, b) in [(lhs, rhs), (rhs, lhs)] {
             if let (MachineValue::Reg(reg), MachineValue::Imm64(imm)) = (a, b) {
                 let reg_phys = map_gp(self.core.compiled.backend(), reg)?;
-                let enc_inst = match width {
-                    MachineIntWidth::I32 => enc::ands_imm_32(dst, reg_phys, imm as u32),
-                    MachineIntWidth::I64 => enc::ands_imm_64(dst, reg_phys, imm),
+                let enc_inst = match (width, publish) {
+                    (MachineIntWidth::I32, true) => enc::ands_imm_32(dst, reg_phys, imm as u32),
+                    (MachineIntWidth::I64, true) => enc::ands_imm_64(dst, reg_phys, imm),
+                    (MachineIntWidth::I32, false) => enc::and_imm_32(dst, reg_phys, imm as u32),
+                    (MachineIntWidth::I64, false) => enc::and_imm_64(dst, reg_phys, imm),
                 };
                 if let Some(inst) = enc_inst {
                     self.core.text.emit_u32(inst);
-                    self.select_flags = Some((dst_m, enc::Cond::Ne));
+                    self.select_flags = published;
                     return Ok(());
                 }
             }
@@ -2668,15 +2688,14 @@ impl<'a> super::backend::Arm64Backend<'a> {
             &self.gp_scratch,
             rhs,
         )?;
-        match width {
-            MachineIntWidth::I32 => {
-                self.core.text.emit_u32(enc::ands_reg_32(dst, *lhs, *rhs));
-            }
-            MachineIntWidth::I64 => {
-                self.core.text.emit_u32(enc::ands_reg_64(dst, *lhs, *rhs));
-            }
-        }
-        self.select_flags = Some((dst_m, enc::Cond::Ne));
+        let inst = match (width, publish) {
+            (MachineIntWidth::I32, true) => enc::ands_reg_32(dst, *lhs, *rhs),
+            (MachineIntWidth::I64, true) => enc::ands_reg_64(dst, *lhs, *rhs),
+            (MachineIntWidth::I32, false) => enc::and_reg_32(dst, *lhs, *rhs),
+            (MachineIntWidth::I64, false) => enc::and_reg_64(dst, *lhs, *rhs),
+        };
+        self.core.text.emit_u32(inst);
+        self.select_flags = published;
         Ok(())
     }
 

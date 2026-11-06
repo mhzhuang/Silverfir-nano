@@ -318,8 +318,16 @@ fn run_wast_tests(engine: Engine, testsuite_dir: &Path, filters: &[String]) -> b
         content: include_str!("../tests/cached_table_dispatch.wast"),
     });
     wast_inputs.push(WastInput::Embedded {
+        path: "cached_local_snapshot.wast",
+        content: include_str!("../tests/cached_local_snapshot.wast"),
+    });
+    wast_inputs.push(WastInput::Embedded {
         path: "bounded_br_table.wast",
         content: include_str!("../tests/bounded_br_table.wast"),
+    });
+    wast_inputs.push(WastInput::Embedded {
+        path: "rotated_loops.wast",
+        content: include_str!("../tests/rotated_loops.wast"),
     });
     wast_inputs.push(WastInput::Embedded {
         path: "branch_load_compare.wast",
@@ -336,6 +344,22 @@ fn run_wast_tests(engine: Engine, testsuite_dir: &Path, filters: &[String]) -> b
     wast_inputs.push(WastInput::Embedded {
         path: "interp_slow_exit_operands.wast",
         content: include_str!("../tests/interp_slow_exit_operands.wast"),
+    });
+    wast_inputs.push(WastInput::Embedded {
+        path: "const_right_operand.wast",
+        content: include_str!("../tests/const_right_operand.wast"),
+    });
+    wast_inputs.push(WastInput::Embedded {
+        path: "memory_base_index.wast",
+        content: include_str!("../tests/memory_base_index.wast"),
+    });
+    wast_inputs.push(WastInput::Embedded {
+        path: "float_bin_operands.wast",
+        content: include_str!("../tests/float_bin_operands.wast"),
+    });
+    wast_inputs.push(WastInput::Embedded {
+        path: "int_bin_operands.wast",
+        content: include_str!("../tests/int_bin_operands.wast"),
     });
     wast_inputs.sort_by(|left, right| left.path().cmp(right.path()));
     info!("Found {} WAST files", wast_inputs.len());

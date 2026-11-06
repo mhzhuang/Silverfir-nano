@@ -159,6 +159,22 @@ fn add_sub_imm(sf: u32, op: u32, s: u32, rd: Arm64Reg, rn: Arm64Reg, imm12: u32)
         | rd.index()
 }
 
+/// `ADD`/`SUB` (immediate) with the immediate shifted left by 12.
+fn add_sub_imm_lsl12(sf: u32, op: u32, rd: Arm64Reg, rn: Arm64Reg, imm12: u32) -> u32 {
+    add_sub_imm(sf, op, 0, rd, rn, imm12) | (1 << 22)
+}
+
+/// `rd = rn + (imm12 << 12)` (or minus, for `sub`), at 64 bits when `w64`.
+pub(crate) fn add_sub_imm_lsl12_inst(
+    w64: bool,
+    sub: bool,
+    rd: Arm64Reg,
+    rn: Arm64Reg,
+    imm12: u32,
+) -> u32 {
+    add_sub_imm_lsl12(u32::from(w64), u32::from(sub), rd, rn, imm12)
+}
+
 fn cond_select(sf: u32, op2: u32, rd: Arm64Reg, rn: Arm64Reg, rm: Arm64Reg, cond: Cond) -> u32 {
     (sf << 31)
         | (0b0_0_11010100 << 21)
@@ -421,6 +437,16 @@ pub(crate) fn bics_reg_32(rd: Arm64Reg, rn: Arm64Reg, rm: Arm64Reg) -> u32 {
 /// `BICS Xd, Xn, Xm`: bit-clear (`Xn & !Xm`) and update NZCV.
 pub(crate) fn bics_reg_64(rd: Arm64Reg, rn: Arm64Reg, rm: Arm64Reg) -> u32 {
     logical_shifted_reg(1, 0b11, 1, rd, rn, rm)
+}
+
+/// `BIC Wd, Wn, Wm`: bit-clear (`Wn & !Wm`), flags untouched.
+pub(crate) fn bic_reg_32(rd: Arm64Reg, rn: Arm64Reg, rm: Arm64Reg) -> u32 {
+    logical_shifted_reg(0, 0b00, 1, rd, rn, rm)
+}
+
+/// `BIC Xd, Xn, Xm`: bit-clear (`Xn & !Xm`), flags untouched.
+pub(crate) fn bic_reg_64(rd: Arm64Reg, rn: Arm64Reg, rm: Arm64Reg) -> u32 {
+    logical_shifted_reg(1, 0b00, 1, rd, rn, rm)
 }
 
 pub(crate) fn tst_imm_32(rn: Arm64Reg, imm: u32) -> Option<u32> {
@@ -955,6 +981,11 @@ pub(crate) fn blr(rn: Arm64Reg) -> u32 {
 
 pub(crate) fn ret() -> u32 {
     (0b1101011_0010 << 21) | (0b11111 << 16) | (abi::link_reg().index() << 5)
+}
+
+/// NOP (HINT #0).
+pub(crate) const fn nop() -> u32 {
+    0xd503_201f
 }
 
 // --- Integer data-processing (2 source) ---
